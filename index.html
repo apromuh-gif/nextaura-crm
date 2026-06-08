@@ -88,6 +88,10 @@ const NX_SYNC_SERVER    = NEXTAURA_CFG?.syncServer || '';
 const NX_GRACE_DAYS     = 30;
 const NX_SYNC_INTERVAL  = 30; // gün
 
+// Faz 5: cihaz-bağımsız kurulum. Aktivasyon anahtarı ile config bu merkezi
+// lisans sunucusundan çekilir. Operatör kendi dağıtımına göre güncelleyebilir.
+const NX_LICENSE_SERVER = 'https://nextaura-teklif.vercel.app';
+
 async function nxSyncLicense() {
   const code = NEXTAURA_CFG?.license?.code;
   if (!code || !NX_SYNC_SERVER) return;
@@ -515,7 +519,7 @@ async function teklifOlustur(customer, opportunityTitle, opportunityId) {
       ? state.proposals.find(p => p.opportunityId === opportunityId && !p.quotationId)
       : null;
     if (existingProp) {
-      const updated = {...existingProp, quotationId: quotationId||'', quotationUrl: quotationUrl||'', quotationStatus: 'DRAFT', ...stamp()};
+      const updated = {...existingProp, quotationId: quotationId||'', quotationUrl: quotationUrl||'', quotationStatus: 'DRAFT', source: 'opportunity', ...stamp()};
       await saveDoc('proposals', existingProp.id, updated);
       setState({ proposals: state.proposals.map(p => p.id===existingProp.id ? updated : p) });
     } else {
@@ -528,6 +532,7 @@ async function teklifOlustur(customer, opportunityTitle, opportunityId) {
         status: 'Hazırlanıyor', createdAt: today(),
         validUntil: '', sentDate: '', notes: '',
         quotationId: quotationId||'', quotationUrl: quotationUrl||'', quotationStatus: 'DRAFT',
+        source: 'opportunity',
         ...stamp(),
       };
       await saveDoc('proposals', propId, propData);
@@ -4433,6 +4438,8 @@ function renderProposals() {
   });
   const autoHidden=hiddenPropsArr.length;
   const propFiltered=state.proposals.filter(p=>{
+    // Fırsatlardan otomatik oluşturulan proposal'lar burada görünmez (manuel kayıtlar için)
+    if(p.source==='opportunity')return false;
     // Gönderildi + sentDate'den 5 gün geçtiyse Teklifler listesinden gizle (veri silinmez)
     if(p.status==='Gönderildi'&&p.sentDate){
       const diff=Math.floor((today0-_toDate(p.sentDate))/(1000*60*60*24));
@@ -5419,6 +5426,57 @@ async function showNextAuraSetup() {
 
     // ── Adım 1: Lisans kodu ──
     if (step===1) {
+      // ── Hızlı Kurulum: Aktivasyon Anahtarı (cihaz-bağımsız) ──
+      const fast=document.createElement('div');
+      fast.style.cssText='background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:12px;padding:16px;margin-bottom:18px';
+      fast.innerHTML='<div style="font-size:14px;font-weight:700;color:#15803d;margin-bottom:4px">⚡ Hızlı Kurulum</div>'+
+        '<div style="font-size:12px;color:#15803d;opacity:.85;margin-bottom:10px">Aktivasyon anahtarınız varsa tüm ayarlar otomatik yüklenir — başka cihazda yeniden kurulum gerekmez.</div>';
+      const akInp=inp('nxak_...',cfg._activationKey||'',v=>cfg._activationKey=v);
+      akInp.style.fontFamily='monospace,sans-serif';
+      akInp.style.letterSpacing='.02em';
+      fast.appendChild(akInp);
+      const akErr=document.createElement('div');
+      akErr.style.cssText='color:#dc2626;font-size:12px;margin-top:8px;min-height:16px';
+      fast.appendChild(akErr);
+      const akBtn=document.createElement('button');
+      akBtn.textContent='Anahtar ile Otomatik Kur';
+      akBtn.style.cssText='width:100%;margin-top:8px;padding:11px;background:linear-gradient(135deg,#16a34a,#22c55e);color:#fff;border:none;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer';
+      akBtn.onclick=async()=>{
+        const key=(cfg._activationKey||'').trim();
+        akErr.textContent='';
+        if (!key || key.length<16) { akErr.textContent='⚠️ Geçerli bir aktivasyon anahtarı girin.'; return; }
+        akBtn.textContent='Yükleniyor...'; akBtn.disabled=true;
+        try {
+          const res=await fetch(`${NX_LICENSE_SERVER}/api/config/${encodeURIComponent(key)}`);
+          if (!res.ok) {
+            const j=await res.json().catch(()=>({}));
+            akErr.textContent = res.status===403 ? '⛔ Lisans askıya alınmış. Destek ile görüşün.'
+              : res.status===404 ? '❌ Anahtar bulunamadı. Lütfen kontrol edin.'
+              : ('❌ '+(j.error||'Yükleme başarısız.'));
+            akBtn.textContent='Anahtar ile Otomatik Kur'; akBtn.disabled=false; return;
+          }
+          const data=await res.json();
+          const remote=data.config||{};
+          // Sunucudan gelen config'i kaydet; lisansı geçerli işaretle.
+          remote.license={ ...(remote.license||{}),
+            code:data.license?.code, product:data.license?.product,
+            tier:data.license?.tier, year:remote.license?.year||0, valid:true };
+          if (!remote.syncServer) remote.syncServer=NX_LICENSE_SERVER;
+          localStorage.setItem('nextaura_config', JSON.stringify(remote));
+          window.location.reload();
+        } catch {
+          akErr.textContent='❌ Sunucuya ulaşılamadı. İnternet bağlantınızı kontrol edin.';
+          akBtn.textContent='Anahtar ile Otomatik Kur'; akBtn.disabled=false;
+        }
+      };
+      fast.appendChild(akBtn);
+      body.appendChild(fast);
+
+      const orDiv=document.createElement('div');
+      orDiv.style.cssText='text-align:center;font-size:11px;color:#9ca3af;margin:0 0 14px;font-weight:600';
+      orDiv.textContent='— veya manuel kurulum —';
+      body.appendChild(orDiv);
+
       const title=document.createElement('div');
       title.style.cssText='font-size:15px;font-weight:700;color:#0f1f35;margin-bottom:6px';
       title.textContent='Lisans Kodunuzu Girin';
