@@ -2681,8 +2681,16 @@ function buildAdminModal() {
     container.appendChild(listDiv);
 
     // Yeni kullanıcı ekle
+    const USER_LIMIT = TIER_FEATURES.unlimited_users ? Infinity : (LICENSE_TIER==='PRO' ? 8 : 3);
+    const activeUserCount = users.filter(u=>u.active!==false).length;
     if(!adding) {
-      container.appendChild(btn('+ Yeni Kullanıcı Ekle',()=>{adding=true;rerender();},'linear-gradient(135deg,#6366f1,#8b5cf6)','#fff','9px 16px',{width:'100%',marginBottom:'10px'}));
+      if(activeUserCount >= USER_LIMIT) {
+        container.appendChild(h('div',{style:{background:'#fef3c7',border:'1px solid #fde68a',borderRadius:'10px',padding:'12px 16px',marginBottom:'10px',fontSize:'13px',color:'#92400e',textAlign:'center'}},
+          `⚠️ ${LICENSE_TIER==='START'?'Başlangıç':'Profesyonel'} paketi maksimum ${USER_LIMIT} kullanıcıya izin veriyor. Daha fazla kullanıcı eklemek için paketi yükselt.`
+        ));
+      } else {
+        container.appendChild(btn('+ Yeni Kullanıcı Ekle',()=>{adding=true;rerender();},'linear-gradient(135deg,#6366f1,#8b5cf6)','#fff','9px 16px',{width:'100%',marginBottom:'10px'}));
+      }
     } else {
       const nName=inp('Ad Soyad',newU.displayName,v=>newU.displayName=v);
       const nPw=inp('Şifre',newU.password,v=>newU.password=v);
@@ -2704,6 +2712,7 @@ function buildAdminModal() {
           btn('✓ Ekle',async()=>{
             if(!newU.email||!newU.password||!newU.displayName){flash('⚠ Tüm alanları doldurun.',false);return;}
             if(users.find(u=>u.email.toLowerCase()===newU.email.toLowerCase())){flash('⚠ E-posta zaten kayıtlı.',false);return;}
+            if(activeUserCount >= USER_LIMIT){flash(`⚠ ${LICENSE_TIER==='START'?'Başlangıç':'Profesyonel'} paketi maksimum ${USER_LIMIT} kullanıcıya izin veriyor.`,false);return;}
             await persistUsers([...users,{...newU,active:true,hasTarget:newU.hasTarget!==false,createdAt:today()}]);
             newU={email:'',password:'',displayName:'',isAdmin:false,hasTarget:true}; adding=false; flash('✅ Kullanıcı eklendi.');
           },'linear-gradient(135deg,#10b981,#059669)','#fff','8px 14px',{flex:'1'}),
