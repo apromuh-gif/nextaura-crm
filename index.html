@@ -172,11 +172,11 @@ const LICENSE_TIER        = NEXTAURA_CFG?.license?.tier    || 'START';
 
 // Tier özellik kilitleri
 const TIER_FEATURES = {
-  ai_reports    : ['PRO','ENT'].includes(LICENSE_TIER),
-  quotation     : ['PRO','ENT'].includes(LICENSE_TIER),
-  multi_currency: ['PRO','ENT'].includes(LICENSE_TIER),
-  unlimited_users: LICENSE_TIER === 'ENT',
-  custom_domain : LICENSE_TIER === 'ENT',
+  ai_reports    : ['PRO','ENT','DEMO'].includes(LICENSE_TIER),
+  quotation     : ['PRO','ENT','DEMO'].includes(LICENSE_TIER),
+  multi_currency: ['PRO','ENT','DEMO'].includes(LICENSE_TIER),
+  unlimited_users: ['ENT','DEMO'].includes(LICENSE_TIER),
+  custom_domain : ['ENT','DEMO'].includes(LICENSE_TIER),
 };
 
 let db, auth;
