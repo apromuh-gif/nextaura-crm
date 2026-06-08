@@ -5143,6 +5143,8 @@ function render() {
               {icon:'🗄️', label:'Yedekleme & Geri Yükleme', color:'#0f1f35', action:()=>{ menu.remove(); setState({modal:{type:'backup'}}); }},
               {icon:'🖨️', label:'Yazdır',          color:'#0f1f35', action:()=>{ menu.remove(); printDashboard(); }},
               {sep:true},
+              {icon:'⚙️', label:'Sistem Ayarları', color:'#0f1f35', action:()=>{ menu.remove(); showNextAuraSetup(); }},
+              {sep:true},
               {icon:'🔔', label:'Bildirim Testi',  color:'#6d28d9', action:()=>{ menu.remove(); testNotifications(); }},
               {icon:'✉️', label:'Mail Testi',      color:'#1d4ed8', action:()=>{ menu.remove(); testMailNotification(); }},
               {icon:'🔊', label:'Ses Testi',       color:'#059669', action:()=>{ menu.remove(); try{const ctx=window._audioCtx||(window._audioCtx=new(window.AudioContext||window.webkitAudioContext)());if(ctx.state==='suspended'){ctx.resume().then(()=>playBeep('win'));}else{playBeep('win');}}catch(e){} }},
