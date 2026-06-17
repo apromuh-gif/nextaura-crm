@@ -60,7 +60,10 @@ const NEXTAURA_CFG = (() => {
   try { return JSON.parse(localStorage.getItem('nextaura_config') || 'null'); } catch { return null; }
 })();
 
-// Lisans doğrulama (offline kriptografik hash)
+// Lisans doğrulama (offline kriptografik hash).
+// DİKKAT: NX_SECRET istemciye gömülü olduğundan offline hash YALNIZCA format/yazım
+// kontrolüdür, güvenlik katmanı DEĞİLDİR. Gerçek yetki sunucudadır (nxServerCheck +
+// nxSyncLicense): sunucuda kayıtlı olmayan kodlar aktivasyonda ve sync'te reddedilir.
 const NX_SECRET = 'NXA-2026-f8c3de3d1fea04cf9bf';
 async function validateLicense(code) {
   if (!code) return null;
@@ -84,13 +87,28 @@ const NEXTAURA_SETUP_MODE = !NEXTAURA_CFG?.firebase?.apiKey || !NEXTAURA_CFG?.li
 const NX_SYNC_KEY       = 'nx_last_sync';
 const NX_SYNC_STATUS_KEY = 'nx_sync_status';
 const NX_SYNC_DAYS_KEY   = 'nx_days_left';
-const NX_SYNC_SERVER    = NEXTAURA_CFG?.syncServer || '';
+// Faz 5: cihaz-bağımsız kurulum. Aktivasyon anahtarı ile config bu merkezi
+// lisans sunucusundan çekilir. Operatör kendi dağıtımına göre güncelleyebilir.
+const NX_LICENSE_SERVER = 'https://nextaura-admin.vercel.app';
+// Periyodik doğrulama sunucusu: config'de belirtilmemişse merkezi sunucuya düşer
+// ki gömülü NX_SECRET ile üretilmiş sahte lisanslar sunucuda yakalanabilsin.
+const NX_SYNC_SERVER    = NEXTAURA_CFG?.syncServer || NX_LICENSE_SERVER;
 const NX_GRACE_DAYS     = 30;
 const NX_SYNC_INTERVAL  = 30; // gün
 
-// Faz 5: cihaz-bağımsız kurulum. Aktivasyon anahtarı ile config bu merkezi
-// lisans sunucusundan çekilir. Operatör kendi dağıtımına göre güncelleyebilir.
-const NX_LICENSE_SERVER = 'https://nextaura-teklif.vercel.app';
+// Sunucu taraflı lisans doğrulama (aktivasyon anında). Sunucuda kayıtlı olmayan
+// veya iptal/askı/süresi dolmuş kodları tespit eder. Ağ hatasında null döner →
+// aktivasyona izin verilir, periyodik sync sonradan yakalar.
+async function nxServerCheck(code) {
+  if (!code) return null;
+  try {
+    const res = await fetch(`${NX_LICENSE_SERVER}/api/sync/${encodeURIComponent(code)}`);
+    if (!res.ok) return res.status === 404 ? { status: 'not_found' } : null;
+    const data = await res.json();
+    if (data.product && !['CRM','SUITE'].includes(data.product)) data.status = 'invalid';
+    return data;
+  } catch { return null; }
+}
 
 async function nxSyncLicense() {
   const code = NEXTAURA_CFG?.license?.code;
@@ -139,7 +157,10 @@ function nxShowLicenseBanner() {
   if (existing) existing.remove();
   if (status === 'active' || status === 'pending') return;
 
-  const isBlocking = status === 'expired' || status === 'suspended' || status === 'grace_expired';
+  // not_found = sunucuda kayıt yok (silinmiş/iptal), invalid = ürün/kod uyuşmuyor.
+  // İkisi de bloklanmalı; aksi halde iptal edilen lisans sessizce çalışmaya devam eder.
+  const isBlocking = status === 'expired' || status === 'suspended' || status === 'grace_expired'
+    || status === 'not_found' || status === 'invalid';
   const isGrace    = status === 'grace';
   const isWarning  = status === 'warning';
   if (!isBlocking && !isGrace && !isWarning) return;
@@ -148,6 +169,7 @@ function nxShowLicenseBanner() {
   const bg2 = isBlocking ? '#b91c1c' : isGrace ? '#b45309' : '#78350f';
   const msg = isBlocking
     ? (status === 'suspended' ? 'Bu hesap askıya alınmıştır. Destek: destek@nextaura.com'
+      : (status === 'not_found' || status === 'invalid') ? 'Lisansınız geçersiz veya iptal edilmiş. Destek: destek@nextaura.com'
       : 'Lisansınızın süresi dolmuştur. Yenileme: destek@nextaura.com')
     : isGrace
     ? 'Lisans sunucusuna bağlanılamıyor. Bağlantınızı kontrol edin. Yakında erişim kısıtlanacak.'
@@ -370,6 +392,7 @@ function selectTeklifFormat() {
       {value:'SYSTEM_SALES',  icon:'🏗️', label:'Sistem Satış',   desc:'Standart sistem satış teklifi'},
       {value:'UNIT_PRICE',    icon:'📊', label:'Birim Fiyatlı',  desc:'Kalem bazlı birim fiyat teklifi'},
       {value:'SYSTEM_ROLLUP', icon:'🗂️', label:'Sistem Master',  desc:'Çoklu sistem master teklif'},
+      {value:'SERVICE',       icon:'🔧', label:'Teknik Servis',  desc:'Bakım/servis teklifi — teknik servis numara serisi'},
     ];
     formats.forEach(f => {
       const b = document.createElement('button');
@@ -471,6 +494,9 @@ async function teklifOlustur(customer, opportunityTitle, opportunityId) {
   const selection = await selectTeklifFormat();
   if (!selection) return;
   const { format, currency, language } = selection;
+  // Teknik Servis: UNIT_PRICE düzeni + isService bayrağı (numara teknik servis serisi).
+  const isService = format === 'SERVICE';
+  const apiFormat = isService ? 'UNIT_PRICE' : format;
   // Personel listelerini Teklif Programı'na sync et (fire-and-forget)
   const salesRepsSync  = usersWithTargets().map(u=>u.displayName);
   const preparedBySync = usersWithTargets().map(u=>u.displayName).sort((a,b)=>a.localeCompare(b,'tr'));
@@ -506,9 +532,10 @@ async function teklifOlustur(customer, opportunityTitle, opportunityId) {
         email: customer.email || '',
         crmCustomerId: customer.id || '',
         crmOpportunityTitle: opportunityTitle || '',
-        format: format,
+        format: apiFormat,
         currency: currency,
         language: language,
+        isService: isService,
       }),
     });
     const body = await res.json().catch(() => null);
@@ -573,7 +600,7 @@ let state = {
   customers: [], opportunities: [], proposals: [], services: [], maintenances: [],
   users: [],
   targets: { company: 0, reps: {} },
-  groqKey: '',
+  geminiKey: '',
   suppliers: [],
   modal: null,
   toast: null,
@@ -641,15 +668,15 @@ async function loadTargets() {
 async function loadApiKey() {
   try {
     const snap = await db.collection('settings').doc('config').get();
-    if(snap.exists && snap.data().groqKey) return snap.data().groqKey;
+    if(snap.exists && snap.data().geminiKey) return snap.data().geminiKey;
     return '';
   } catch(e) { return ''; }
 }
 async function saveApiKey(key) {
   try {
-    await db.collection('settings').doc('config').set({groqKey:key},{merge:true});
-    state.groqKey = key;
-    showToast('✅ Groq API Key kaydedildi!','#16a34a');
+    await db.collection('settings').doc('config').set({geminiKey:key},{merge:true});
+    state.geminiKey = key;
+    showToast('✅ Gemini API Key kaydedildi!','#16a34a');
   } catch(e) { showToast('❌ Kaydedilemedi!','#dc2626'); }
 }
 
@@ -1262,9 +1289,11 @@ function buildOppModal(item) {
   const repOptions = [{v:'',l:'-- Seçin --'},...usersWithTargets().map(u=>({v:u.displayName,l:u.displayName}))];
   const fAssigned = sel(repOptions, f.assignedTo, v=>f.assignedTo=v);
   const fDue=inp('',f.dueDate,v=>f.dueDate=v,'date');
-  const fRef=h('input',{placeholder:'REF-2024-001 veya https://sunucu/dosya.pdf',value:f.tenderRef||'',
-    style:{width:'100%',padding:'9px 12px',background:G,border:`1px solid ${G4}`,borderRadius:'8px',color:T1,fontSize:'13px',boxSizing:'border-box',fontFamily:"'DM Sans',sans-serif",outline:'none'}});
-  fRef.addEventListener('input',e=>f.tenderRef=e.target.value);
+  // REF. salt-okunur: değer Teklif Programı'ndan (teklif hazırlandı/gönderildi → numara)
+  // otomatik gelir. Manuel giriş kapalı — aksi halde sync üzerine yazardı.
+  const fRef=h('input',{placeholder:'Teklif hazırlandığında otomatik gelecek',value:f.tenderRef||'',
+    readOnly:true,title:'REF. teklif programından otomatik gelir; elle düzenlenemez.',
+    style:{width:'100%',padding:'9px 12px',background:'#eef2f7',border:`1px solid ${G4}`,borderRadius:'8px',color:'#64748b',fontSize:'13px',boxSizing:'border-box',fontFamily:"'DM Sans',sans-serif",outline:'none',cursor:'not-allowed'}});
   const fNotes=h('textarea',{placeholder:'Notlar...',style:{width:'100%',padding:'9px 12px',background:G,border:`1px solid ${G4}`,borderRadius:'8px',color:T1,fontSize:'13px',minHeight:'55px',resize:'vertical',boxSizing:'border-box',fontFamily:"'DM Sans',sans-serif"}},f.notes||'');
   fNotes.addEventListener('input',e=>f.notes=e.target.value);
 
@@ -1943,7 +1972,7 @@ function buildReportWindow(title, subtitle, d, aiContent, trendRows, isQuarterly
   html+="<div><div style='font-size:10px;color:rgba(255,255,255,.5);text-transform:uppercase'>Rapor Tarihi</div><div style='font-size:15px;font-weight:700'>"+reportDate+"</div></div>";
   html+="<div><div style='font-size:10px;color:rgba(255,255,255,.5);text-transform:uppercase'>Şirket Hedefi</div><div style='font-size:15px;font-weight:700'>"+eur(d.compTarget)+"</div></div>";
   html+="<div><div style='font-size:10px;color:rgba(255,255,255,.5);text-transform:uppercase'>Hedefe Ulaşma</div><div style='font-size:15px;font-weight:700;color:"+tcolor+"'>%"+d.targetPct+"</div></div>";
-  html+="<div><div style='font-size:10px;color:rgba(255,255,255,.5);text-transform:uppercase'>Hazırlayan</div><div style='font-size:15px;font-weight:700'>Groq AI</div></div>";
+  html+="<div><div style='font-size:10px;color:rgba(255,255,255,.5);text-transform:uppercase'>Hazırlayan</div><div style='font-size:15px;font-weight:700'>Gemini AI</div></div>";
   html+="</div></div>";
   html+="<div class='kw'><div class='kg'>";
   html+="<div class='kb'><div class='kv'>"+eur(d.totalWon)+"</div><div class='kl'>Kazanılan Ciro</div></div>";
@@ -1987,26 +2016,47 @@ box.style.cssText="background:#fff;border-radius:16px;padding:"+(isMobLogin?"28p
 }
 function hideSpinner(){var s=document.getElementById("ai-spinner");if(s&&document.body.contains(s))document.body.removeChild(s);}
 
+async function callGeminiReport(systemText, userText, temperature){
+  var apiKey=state.geminiKey||"";
+  if(!apiKey){showToast("❌ Gemini API Key eksik — 🎯 Hedefler panelinden girin","#dc2626");return null;}
+  var url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key="+encodeURIComponent(apiKey);
+  var resp=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+    systemInstruction:{parts:[{text:systemText}]},
+    contents:[{role:"user",parts:[{text:userText}]}],
+    tools:[{google_search:{}}],
+    generationConfig:{temperature:temperature,maxOutputTokens:8192,thinkingConfig:{thinkingBudget:0}}
+  })});
+  var data=await resp.json();
+  if(data.error){showToast("❌ Gemini API: "+(data.error.message||"hata"),"#dc2626");return null;}
+  var cand=(data.candidates||[])[0]||{};
+  var parts=(cand.content&&cand.content.parts)||[];
+  var text=parts.map(function(p){return p.text||"";}).join("").trim();
+  text=text.replace(/^```html\s*/i,"").replace(/^```\s*/,"").replace(/```\s*$/,"").trim();
+  var sources="";
+  var gm=cand.groundingMetadata;
+  if(gm&&gm.groundingChunks&&gm.groundingChunks.length){
+    var seen={},items=[];
+    gm.groundingChunks.forEach(function(c){
+      var w=c.web;if(w&&w.uri&&!seen[w.uri]){seen[w.uri]=1;
+        items.push("<li style='margin-bottom:6px;font-size:12px;line-height:1.5'><a href='"+w.uri+"' target='_blank' rel='noopener' style='color:#2563eb;text-decoration:none'>"+(w.title||w.uri)+"</a></li>");}
+    });
+    if(items.length)sources="<section style='margin-top:28px;padding-top:16px;border-top:1px solid #e2e8f0'><h2 style='color:#1e3a5f;font-size:14px;margin-bottom:10px'>📚 Araştırma Kaynakları (Google)</h2><ul style='padding-left:20px;margin:0'>"+items.join("")+"</ul></section>";
+  }
+  return {text:text,sources:sources};
+}
+
 // ── AYLIK RAPOR (sadece PDF, kaydedilmez) ──────────────
 async function generateMonthlyReport() {
   var d=prepareReportData();
   var monthName=d.now.toLocaleString("tr-TR",{month:"long",year:"numeric"});
-  // Sektörel bağlam - Türkiye yangın güvenlik sektörü
-  var sectorContext = "TURKIYE YANGIN GUVENLIK SEKTORU BAĞLAMI (2024-2025):\n"+
-    "- Pazar buyuklugu: yaklasik 2.5-3 milyar TL yillik\n"+
-    "- Buyume orani: yilda %15-20 (bina stogu artisi, mevzuat siklasmasi)\n"+
-    "- Temel buyume faktorleri: 2007 Binaların Yangından Korunması Yönetmeliği revizyonlari, AVM/hastane/okul projelerinde zorunlu sistemler, sanayi yapilasmasi\n"+
-    "- Rekabet: Sistemat, Minimax, Siemens, Hochiki, Fike, Novec/3M, yerel entegratörler\n"+
-    "- Sektörel trendler: Novec yerine FM-200/CO2 gecisi, IoT entegre algılama, erken uyari sistemleri, yeşil bina sertifikasyonu (LEED/BREEAM) talebinde artış\n"+
-    "- Hedef sektorler (yuksek buyume): hastaneler, veri merkezleri, lojistik depolar, uretim tesisleri, enerji santralleri, kamu yatirimlari\n"+
-    "- Mevzuat riski: 2025 bina denetim sıkılaştırması büyük proje fırsatı anlamına geliyor\n"+
-    "- Ortalama ihale süresi: 3-8 ay, satis dongusu: 6-18 ay\n"+
-    "- Kritik basari faktorleri: teknik referans, marka güveni, yerel servis ağı, hızlı teklif süreci";
+  var sectorContext = "FİRMA SEKTÖR BİLGİSİ:\n"+
+    "- Firma: "+COMPANY_NAME+"\n"+
+    "- Faaliyet alanı / sektör: "+(COMPANY_SECTOR||"(belirtilmemiş)")+"\n"+
+    "Google arama aracını kullanarak bu firmanın bulunduğu sektöre dair GÜNCEL pazar verilerini (pazar büyüklüğü, büyüme oranı, rakipler, mevzuat/düzenleme değişiklikleri, ihale/yatırım trendleri, teknoloji eğilimleri) araştır ve aşağıdaki CRM verisiyle birleştir.";
 
-  var p1 = "Sen deneyimli bir stratejik iş danışmansın. "+
+  var p1 = "Sen deneyimli bir stratejik iş danışmanı ve pazarlama uzmanısın. "+
     COMPANY_NAME+" için aylık yönetici raporu hazırlayacaksın. "+
     (COMPANY_SECTOR ? COMPANY_NAME+"; "+COMPANY_SECTOR+" alanlarında faaliyet gösteriyor. " : "")+
-    "Müşteri profili: büyük ölçekli kurumsal, kamu ve sanayi projeleri. "+
     "Verileri yüzeysel özetleme — her bulgu için NEDEN önemli olduğunu ve NE YAPILMALI gerektiğini açıkla. "+
     "Rakip konumlandırma, pazar fırsatı ve risk perspektifiyle analiz et.";
 
@@ -2041,17 +2091,14 @@ async function generateMonthlyReport() {
     "FORMAT: Her bölüm için <section style='margin-bottom:32px'>, başlık <h2 style='color:#1e3a5f;border-bottom:2px solid #2563eb;padding-bottom:8px;margin-bottom:16px;font-size:16px'>, metin <p style='line-height:1.8;color:#2d3748;margin-bottom:12px;font-size:14px'>, liste <ul style='padding-left:20px;margin-bottom:12px'><li style='margin-bottom:8px;line-height:1.7;font-size:14px;color:#2d3748'>. "+
     "Sadece inline style. Rapor çok kapsamlı ve uzun olmalı — bir danışmanlık firmasının hazırladığı kalitede.";
   if(!TIER_FEATURES.ai_reports){tierBlock('ai_reports');return;}
-  var apiKey=state.groqKey||"";
-  if(!apiKey){showToast("❌ Groq API Key eksik — 🎯 Hedefler panelinden girin","#dc2626");return;}
+  if(!state.geminiKey){showToast("❌ Gemini API Key eksik — 🎯 Hedefler panelinden girin","#dc2626");return;}
   var spinner=showSpinner("Aylık rapor hazırlanıyor...");
   try{
-    var resp=await fetch("https://api.groq.com/openai/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+apiKey},body:JSON.stringify({model:"llama-3.3-70b-versatile",max_tokens:8000,temperature:0.3,messages:[{role:"system",content:"Sen Türkiye inşaat, yangın güvenlik ve mühendislik sektörü uzmanı bir stratejik danışmansın. Verilen CRM verilerini ve sektörel bağlamı kullanarak derin, analitik, aksiyona dönük raporlar hazırlıyorsun. Yüzeysel özet yapma — her bulgu için somut yorum ve öneri sun. HTML formatında yaz."},{role:"user",content:p1+p2+p3+p4}]})});
-    var data=await resp.json();
-    if(data.error){hideSpinner();showToast("❌ Groq API: "+data.error.message,"#dc2626");return;}
-    var aiText=((data.choices||[])[0]||{}).message&&data.choices[0].message.content?data.choices[0].message.content.trim():"";
-    if(!aiText){hideSpinner();showToast("❌ Groq boş yanıt döndürdü, tekrar deneyin","#dc2626");return;}
+    var sysMonthly="Sen "+(COMPANY_SECTOR?COMPANY_SECTOR+" sektöründe ":"")+"20 yıllık deneyime sahip, McKinsey düzeyinde bir stratejik danışman ve pazarlama uzmanısın. Google arama aracını kullanarak "+COMPANY_NAME+" firmasının bulunduğu sektöre ("+(COMPANY_SECTOR||"belirtilen faaliyet alanı")+") dair GÜNCEL veriler araştır: pazar büyüklüğü ve büyüme oranı, son mevzuat/düzenleme değişiklikleri, rakip firmaların hamleleri, açılan/beklenen ihale ve yatırımlar, sektör trendleri. Bu güncel araştırmayı verilen CRM verisiyle birleştirerek yöneticiyi yönlendiren analiz üret. Yüzeysel özet yapma — her bulgu için NEDEN önemli ve NE YAPILMALI açıkla. Yanıtını SADECE geçerli HTML olarak yaz (markdown veya ```html bloğu kullanma).";
+    var r=await callGeminiReport(sysMonthly,p1+p2+p3+p4,0.3);
     hideSpinner();
-    buildReportWindow("Aylık Yönetici Raporu",monthName+" — Yapay Zeka Analizi",d,aiText,null,false);
+    if(!r||!r.text){showToast("❌ Rapor oluşturulamadı, tekrar deneyin","#dc2626");return;}
+    buildReportWindow("Aylık Yönetici Raporu",monthName+" — Yapay Zeka Analizi",d,r.text+r.sources,null,false);
     showToast("✅ Aylık rapor hazır!","#16a34a");
   }catch(err){hideSpinner();showToast("❌ Bağlantı hatası: "+err.message,"#dc2626");}
 }
@@ -2075,14 +2122,10 @@ async function generateQuarterlyReport() {
     trendText+="\nBu verileri kullanarak ceyreksel trend analizi de yap.";
   }
 
-  // Sektörel bağlam
-  var sectorContextQ = "TURKIYE YANGIN GUVENLIK SEKTORU (2024-2025):\n"+
-    "Pazar: 2.5-3 milyar TL, yilda %15-20 büyüme. Temel sürücüler: mevzuat sıkılaşması, bina stoğu artışı, sanayi yatırımları.\n"+
-    "Rakipler: Sistemat, Minimax, Siemens, Hochiki, Fike, yerel entegratörler.\n"+
-    "Yüksek potansiyel sektörler: veri merkezleri, lojistik, üretim tesisleri, hastaneler, enerji santralleri, kamu.\n"+
-    "Trendler: IoT entegre sistemler, yeşil bina sertifikasyonu, erken uyarı teknolojileri, periyodik bakım zorunluluğu artışı.\n"+
-    "Fırsat: 2025 bina denetim sıkılaştırması, kamudan büyük ihaleler bekleniyor.\n"+
-    "Risk: Uzun satış döngüsü (6-18 ay), ihale kayıpları, büyük rakiplerin fiyat baskısı.";
+  var sectorContextQ = "FİRMA SEKTÖR BİLGİSİ:\n"+
+    "- Firma: "+COMPANY_NAME+"\n"+
+    "- Faaliyet alanı / sektör: "+(COMPANY_SECTOR||"(belirtilmemiş)")+"\n"+
+    "Google arama aracını kullanarak bu sektöre dair GÜNCEL pazar verilerini (pazar büyüklüğü, büyüme oranı, rakipler, mevzuat/düzenleme, ihale/yatırım trendleri, teknoloji eğilimleri, riskler) araştır ve CRM verisiyle birleştir.";
 
   var p1 = "Sen deneyimli bir stratejik iş danışmansın. "+
     COMPANY_NAME+" için çeyreksel stratejik rapor hazırlıyorsun. "+
@@ -2121,16 +2164,13 @@ async function generateQuarterlyReport() {
     "FORMAT: <section style='margin-bottom:36px'>, <h2 style='color:#1e3a5f;border-bottom:2px solid #7c3aed;padding-bottom:8px;margin-bottom:16px;font-size:16px'>, <h3 style='color:#5b21b6;margin-bottom:10px;font-size:14px'>, <p style='line-height:1.8;color:#2d3748;margin-bottom:12px;font-size:14px'>, <ul style='padding-left:20px;margin-bottom:12px'><li style='margin-bottom:8px;line-height:1.7;font-size:14px'>. Sadece inline style.";
 
   if(!TIER_FEATURES.ai_reports){tierBlock('ai_reports');return;}
-  var apiKey2=state.groqKey||"";
-  if(!apiKey2){showToast("❌ Groq API Key eksik — 🎯 Hedefler panelinden girin","#dc2626");return;}
+  if(!state.geminiKey){showToast("❌ Gemini API Key eksik — 🎯 Hedefler panelinden girin","#dc2626");return;}
   var spinner=showSpinner("3 aylık rapor hazırlanıyor...");
   try{
-    var resp=await fetch("https://api.groq.com/openai/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+apiKey2},body:JSON.stringify({model:"llama-3.3-70b-versatile",max_tokens:8000,temperature:0.2,messages:[{role:"system",content:"Sen Türkiye mühendislik ve yangın güvenlik sektörü uzmanı, McKinsey kalitesinde stratejik danışmansın. CRM verilerini sektörel bağlamla birleştirerek derin, stratejik, aksiyona dönük analizler yapıyorsun. Rakip konumlandırma, pazar dinamikleri ve büyüme stratejisi perspektifiyle yaklaş. HTML formatında, kapsamlı raporlar hazırla."},{role:"user",content:p1+p2+p3+p4}]})});
-    var data=await resp.json();
-    if(data.error){hideSpinner();showToast("❌ Groq API: "+data.error.message,"#dc2626");return;}
-    var aiContent=((data.choices||[])[0]||{}).message&&data.choices[0].message.content?data.choices[0].message.content.trim():"";
-    if(!aiContent){aiContent="<p>Rapor oluşturulamadı.</p>";}
+    var sysQuarterly="Sen "+(COMPANY_SECTOR?COMPANY_SECTOR+" sektöründe ":"")+"McKinsey/BCG kalitesinde stratejik danışman ve pazarlama uzmanısın. Google arama aracını kullanarak "+COMPANY_NAME+" firmasının bulunduğu sektöre ("+(COMPANY_SECTOR||"belirtilen faaliyet alanı")+") dair GÜNCEL veriler araştır: pazar büyüklüğü ve büyüme oranı, mevzuat/düzenleme değişiklikleri, rakip firma hamleleri, ihale ve yatırım trendleri, sektörel teknoloji eğilimleri. Bu araştırmayı CRM verisiyle birleştirip rakip konumlandırma, pazar dinamikleri ve büyüme stratejisi perspektifiyle derin analiz üret. Yanıtını SADECE geçerli HTML olarak yaz (markdown veya ```html bloğu kullanma).";
+    var rq=await callGeminiReport(sysQuarterly,p1+p2+p3+p4,0.2);
     hideSpinner();
+    var aiContent=(rq&&rq.text)?rq.text+rq.sources:"<p>Rapor oluşturulamadı.</p>";
 
     // Firebase'e kaydet
     try{
@@ -2391,8 +2431,8 @@ function buildTargetsModal() {
 
   const container = h('div',{});
 
-  let apiKeyVal = state.groqKey || '';
-  const apiInp = h('input',{type:'password',placeholder:'gsk_...',value:apiKeyVal,
+  let apiKeyVal = state.geminiKey || '';
+  const apiInp = h('input',{type:'password',placeholder:'AIza... / AQ...',value:apiKeyVal,
     style:{flex:'1',padding:'10px 13px',background:'#f0f5fc',border:'1.5px solid #90bcd8',borderRadius:'9px',color:'#0f1f35',fontSize:'13px',fontFamily:"'Inter',sans-serif",outline:'none'}});
   apiInp.addEventListener('input',e=>{apiKeyVal=e.target.value.trim();});
   const toggleBtn=h('button',{
@@ -2400,7 +2440,7 @@ function buildTargetsModal() {
     style:{padding:'10px 13px',background:'#e8f0fb',border:'1px solid #90bcd8',borderRadius:'9px',color:'#1e2d4a',cursor:'pointer',fontSize:'12px',whiteSpace:'nowrap'}
   },'👁 Göster');
   const saveKeyBtn=h('button',{
-    onClick:async()=>{if(apiKeyVal.startsWith('gsk_')){await saveApiKey(apiKeyVal);}else{showToast('❌ Geçersiz Groq key (gsk_ ile başlamalı)','#dc2626');}},
+    onClick:async()=>{if(apiKeyVal.length>=20){await saveApiKey(apiKeyVal);}else{showToast('❌ Geçersiz Gemini key (çok kısa görünüyor)','#dc2626');}},
     style:{padding:'10px 16px',background:'linear-gradient(135deg,#2563eb,#1d4ed8)',border:'none',borderRadius:'9px',color:'#fff',cursor:'pointer',fontSize:'13px',fontWeight:'700',whiteSpace:'nowrap'}
   },'💾 Kaydet');
 
@@ -2433,14 +2473,14 @@ function buildTargetsModal() {
       h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'12px'}},
         h('span',{style:{fontSize:'22px'}},'🤖'),
         h('div',{},
-          h('div',{style:{fontWeight:'800',fontSize:'15px',color:'#1e2d4a'}},'Groq AI — Rapor API Key'),
-          h('div',{style:{fontSize:'12px',color:'#4a6080',marginTop:'2px'}},"Ücretsiz Groq AI · console.groq.com'dan alın · Firebase'e kaydedilir")
+          h('div',{style:{fontWeight:'800',fontSize:'15px',color:'#1e2d4a'}},'Gemini AI — Rapor API Key'),
+          h('div',{style:{fontSize:'12px',color:'#4a6080',marginTop:'2px'}},"Ücretsiz Gemini AI · aistudio.google.com/apikey'den alın · Google arama destekli · Firebase'e kaydedilir")
         )
       ),
       h('div',{style:{display:'flex',gap:'8px',alignItems:'center',marginBottom:'10px'}},apiInp,toggleBtn,saveKeyBtn),
-      state.groqKey
-        ?h('div',{style:{fontSize:'12px',color:'#16a34a',fontWeight:'700'}},'✅ Groq Key kayıtlı — Raporlar aktif')
-        :h('div',{style:{fontSize:'12px',color:'#d97706',fontWeight:'700'}},'⚠️ Groq Key girilmemiş — Raporlar çalışmaz')
+      state.geminiKey
+        ?h('div',{style:{fontSize:'12px',color:'#16a34a',fontWeight:'700'}},'✅ Gemini Key kayıtlı — Raporlar aktif')
+        :h('div',{style:{fontSize:'12px',color:'#d97706',fontWeight:'700'}},'⚠️ Gemini Key girilmemiş — Raporlar çalışmaz')
     ));
 
     // ── Şirket Satış Hedefi ──
@@ -4126,6 +4166,9 @@ function makeSearchInput(val, onChange) {
   b.style.cssText = 'padding:8px 15px;background:#f97316;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap';
   inp.addEventListener('keydown', function(e){ if(e.key==='Enter') onChange(inp.value); });
   b.addEventListener('click', function(){ onChange(inp.value); });
+  // Kutu boşaltılınca (metin silinince) filtre otomatik sıfırlanır — aksi halde
+  // Bul/Enter beklediği için eski filtre görünmeye devam ediyordu.
+  inp.addEventListener('input', function(){ if(inp.value === '') onChange(''); });
   wrap.appendChild(inp);
   wrap.appendChild(b);
   return wrap;
@@ -4381,7 +4424,7 @@ function renderOpportunities() {
       h('td',{style:{padding:'10px 11px',fontSize:'11px',whiteSpace:'nowrap'}},o._editedBy?h('span',{},h('span',{style:{color:'#1e3a5f',fontWeight:'700'}},o._editedBy),h('br'),h('span',{style:{color:T4}},o._editedAt||'')):h('span',{style:{color:T4}},'—')),
       h('td',{style:{padding:'10px 11px',fontSize:'13px'}},h('div',{style:{display:'flex',gap:'5px'}},
         btn('Düzenle',()=>setState({modal:{type:'opportunity',item:o}}),'#eff6ff','#1d4ed8','6px 12px',{fontSize:'12px',border:'1px solid #bfdbfe',borderRadius:'7px'}),
-        (()=>{const lp=state.proposals.find(p=>p.opportunityId===o.id&&p.quotationId);if(!lp)return btn('📋 Teklif Oluştur',()=>{const cust=custById(o.customerId);if(cust)teklifOlustur(cust,o.title,o.id);else alert('Müşteri bulunamadı.');},'#ecfdf5','#15803d','6px 12px',{fontSize:'12px',border:'1px solid #86efac',borderRadius:'7px'});const crmSent=['Gönderildi','Revize','Randevu','Onaylandı','Reddedildi'];const isDraft=lp.quotationStatus?lp.quotationStatus==='DRAFT':!crmSent.includes(lp.status);return isDraft?btn('✏️ Taslağı Aç',()=>openQuotationWithSSO(lp.quotationId),'#fffbeb','#b45309','6px 12px',{fontSize:'12px',border:'1px solid #fcd34d',borderRadius:'7px'}):btn('🔗 Teklif Programı',()=>openQuotationWithSSO(lp.quotationId),'#eff6ff','#1d4ed8','6px 12px',{fontSize:'12px',border:'1px solid #bfdbfe',borderRadius:'7px',whiteSpace:'nowrap'});})(),
+        (()=>{const lp=state.proposals.find(p=>p.opportunityId===o.id&&p.quotationId);if(!lp)return btn('📋 Teklif Oluştur',()=>{const cust=custById(o.customerId);if(cust)teklifOlustur(cust,o.title,o.id);else alert('Müşteri bulunamadı.');},'#ecfdf5','#15803d','6px 12px',{fontSize:'12px',border:'1px solid #86efac',borderRadius:'7px'});const crmSent=['Gönderildi','Revize','Randevu','Onaylandı','Reddedildi'];const qStatus=o.quotationStatus||lp.quotationStatus;const isDraft=qStatus?qStatus==='DRAFT':!crmSent.includes(lp.status);return isDraft?btn('✏️ Taslağı Aç',()=>openQuotationWithSSO(lp.quotationId),'#fffbeb','#b45309','6px 12px',{fontSize:'12px',border:'1px solid #fcd34d',borderRadius:'7px'}):btn('🔗 Teklif Programı',()=>openQuotationWithSSO(lp.quotationId),'#eff6ff','#1d4ed8','6px 12px',{fontSize:'12px',border:'1px solid #bfdbfe',borderRadius:'7px',whiteSpace:'nowrap'});})(),
         btn('Sil',()=>delItem('opportunities',o.id),'#fef2f2','#dc2626','6px 12px',{fontSize:'12px',border:'1px solid #fecaca',borderRadius:'7px'})
       ))
     );
@@ -4412,7 +4455,7 @@ function renderOpportunities() {
           ),
           o.dueDate?h('div',{style:{fontSize:'11px',color:T3,marginBottom:'8px'}},'📅 Sipariş: '+_toTR(o.dueDate)):h('span'),
           h('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap'}},
-            (()=>{const lp=state.proposals.find(p=>p.opportunityId===o.id&&p.quotationId);if(!lp)return btn('📋 Teklif Oluştur',()=>{const cust=custById(o.customerId);if(cust)teklifOlustur(cust,o.title,o.id);else alert('Müşteri bulunamadı.');},'#ecfdf5','#15803d','7px 12px',{fontSize:'12px',border:'1px solid #86efac',borderRadius:'7px'});const crmSent=['Gönderildi','Revize','Randevu','Onaylandı','Reddedildi'];const isDraft=lp.quotationStatus?lp.quotationStatus==='DRAFT':!crmSent.includes(lp.status);return isDraft?btn('✏️ Taslağı Aç',()=>openQuotationWithSSO(lp.quotationId),'#fffbeb','#b45309','7px 12px',{fontSize:'12px',border:'1px solid #fcd34d',borderRadius:'7px'}):btn('🔗 Teklif Programı',()=>openQuotationWithSSO(lp.quotationId),'#eff6ff','#1d4ed8','7px 12px',{fontSize:'12px',border:'1px solid #bfdbfe',borderRadius:'7px'});})(),
+            (()=>{const lp=state.proposals.find(p=>p.opportunityId===o.id&&p.quotationId);if(!lp)return btn('📋 Teklif Oluştur',()=>{const cust=custById(o.customerId);if(cust)teklifOlustur(cust,o.title,o.id);else alert('Müşteri bulunamadı.');},'#ecfdf5','#15803d','7px 12px',{fontSize:'12px',border:'1px solid #86efac',borderRadius:'7px'});const crmSent=['Gönderildi','Revize','Randevu','Onaylandı','Reddedildi'];const qStatus=o.quotationStatus||lp.quotationStatus;const isDraft=qStatus?qStatus==='DRAFT':!crmSent.includes(lp.status);return isDraft?btn('✏️ Taslağı Aç',()=>openQuotationWithSSO(lp.quotationId),'#fffbeb','#b45309','7px 12px',{fontSize:'12px',border:'1px solid #fcd34d',borderRadius:'7px'}):btn('🔗 Teklif Programı',()=>openQuotationWithSSO(lp.quotationId),'#eff6ff','#1d4ed8','7px 12px',{fontSize:'12px',border:'1px solid #bfdbfe',borderRadius:'7px'});})(),
             btn('✏️ Düzenle',()=>setState({modal:{type:'opportunity',item:o}}),'#fff3cd','#d97706','7px 14px',{fontSize:'12px',border:'1px solid #fcd34d',borderRadius:'7px',flex:'1'}),
             btn('🗑️',()=>{if(confirm('Bu fırsatı silmek istediğinizden emin misiniz?')){deleteDoc('opportunities',o.id).then(()=>setState({opportunities:state.opportunities.filter(x=>x.id!==o.id)}));}},'#fef2f2','#dc2626','7px 12px',{fontSize:'13px',border:'1px solid #fecaca',borderRadius:'7px'})
           )
@@ -5372,7 +5415,7 @@ async function showNextAuraSetup() {
     lang:'tr', currency:'EUR',
     firebase:{ apiKey:'',authDomain:'',projectId:'',storageBucket:'',messagingSenderId:'',appId:'' },
     emailjs:{ serviceId:'', templateId:'', publicKey:'' },
-    groqKey:'',
+    geminiKey:'',
     teklifUrl:'', teklifApiKey:''
   };
 
@@ -5406,6 +5449,16 @@ async function showNextAuraSetup() {
 
   function renderStep() {
     root.innerHTML='';
+    // Özellik kilitleri, sayfa açılışındaki donmuş TIER_FEATURES yerine
+    // sihirbazda girilen lisanstan (cfg.license) türetilir — ilk kurulumda
+    // PRO/ENT müşteri Gemini/çoklu döviz/teklif alanlarını görebilsin diye.
+    const _wt = (cfg.license && cfg.license.tier) || '';
+    const _wp = (cfg.license && cfg.license.product) || '';
+    const wf = {
+      ai_reports    : ['PRO','ENT','DEMO'].includes(_wt),
+      quotation     : _wp === 'SUITE' || ['PRO','ENT','DEMO'].includes(_wt),
+      multi_currency: ['PRO','ENT','DEMO'].includes(_wt),
+    };
     const wrap=document.createElement('div');
     wrap.style.cssText='min-height:100vh;background:linear-gradient(160deg,#0f2040,#1e3a6e);display:flex;align-items:center;justify-content:center;font-family:Inter,sans-serif;padding:20px;';
     const card=document.createElement('div');
@@ -5508,13 +5561,14 @@ async function showNextAuraSetup() {
       body.appendChild(inp('örn: ABC Mühendislik Ltd.',cfg.companyName,v=>cfg.companyName=v));
       body.appendChild(lbl('Kısa Sektör Tanımı (navbar\'da görünür)'));
       body.appendChild(inp('örn: Yangın & Güvenlik',cfg.sectorShort,v=>cfg.sectorShort=v));
-      body.appendChild(lbl('Faaliyet Alanı (YZ raporları için)'));
+      body.appendChild(lbl('Faaliyet Alanı / Sektör',true));
       const ta=document.createElement('textarea');
       ta.placeholder='örn: Yangın algılama, söndürme sistemleri, periyodik bakım hizmetleri...';
       ta.value=cfg.sector||''; ta.rows=3;
       ta.style.cssText='width:100%;padding:11px 13px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;font-family:Inter,sans-serif;outline:none;box-sizing:border-box;resize:vertical;';
       ta.addEventListener('input',()=>cfg.sector=ta.value.trim());
       body.appendChild(ta);
+      body.appendChild(hint('🤖 <b>Yapay zeka yönetici raporları için zorunludur.</b> Girdiğiniz sektör bilgisi, raporun firmanızın bulunduğu pazarı araştırması ve size özel stratejik analiz sunması için kullanılır. Ne kadar açıklayıcı yazarsanız rapor o kadar isabetli olur.'));
     }
 
     // ── Adım 3: Admin kullanıcı ──
@@ -5541,7 +5595,7 @@ async function showNextAuraSetup() {
         if(v===cfg.currency) o.selected=true;
         curSel.appendChild(o);
       });
-      if (!TIER_FEATURES.multi_currency) {
+      if (!wf.multi_currency) {
         curSel.disabled=true;
         body.appendChild(lbl('Para Birimi'));
         body.appendChild(curSel);
@@ -5566,16 +5620,16 @@ async function showNextAuraSetup() {
       body.appendChild(inp('Service ID: service_...',cfg.emailjs.serviceId,v=>cfg.emailjs.serviceId=v));
       body.appendChild(inp('Template ID: template_...',cfg.emailjs.templateId,v=>cfg.emailjs.templateId=v));
       body.appendChild(inp('Public Key',cfg.emailjs.publicKey,v=>cfg.emailjs.publicKey=v));
-      if (TIER_FEATURES.ai_reports) {
-        body.appendChild(lbl('Groq API — YZ Raporları'));
-        body.appendChild(inp('gsk_...',cfg.groqKey,v=>cfg.groqKey=v));
-        body.appendChild(hint('🤖 Groq API Key: console.groq.com/keys adresinden ücretsiz alabilirsiniz.'));
+      if (wf.ai_reports) {
+        body.appendChild(lbl('Gemini API — YZ Raporları'));
+        body.appendChild(inp('AIza... / AQ...',cfg.geminiKey,v=>cfg.geminiKey=v));
+        body.appendChild(hint('🤖 Gemini API Key: aistudio.google.com/apikey adresinden ücretsiz alabilirsiniz. Google arama destekli, gerçek sektör araştırması yapar.'));
       } else {
         body.appendChild(Object.assign(document.createElement('div'),{
           innerHTML:'<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:9px;padding:12px 14px;margin-top:14px;font-size:13px;color:#92400e">🔒 <b>YZ Raporları</b> — Profesyonel ve Kurumsal paketlerde kullanılabilir.</div>'
         }));
       }
-      if (TIER_FEATURES.quotation) {
+      if (wf.quotation) {
         body.appendChild(lbl('Teklif Programı Entegrasyonu'));
         body.appendChild(inp('Teklif App URL: https://...',cfg.teklifUrl,v=>cfg.teklifUrl=v));
         body.appendChild(inp('API Key',cfg.teklifApiKey,v=>cfg.teklifApiKey=v));
@@ -5597,7 +5651,7 @@ async function showNextAuraSetup() {
             '📦 Paket: <b>'+(TIER_LABELS[cfg.license.tier]||cfg.license.tier)+' '+(PROD_LABELS[cfg.license.product]||cfg.license.product)+'</b><br>'+
             '👤 Admin: <b>'+cfg.defaultAdmin.email+'</b><br>'+
             '💱 Para Birimi: <b>'+cfg.currency+'</b><br>'+
-            '🤖 YZ Raporları: <b>'+(TIER_FEATURES.ai_reports?'Aktif':'Pakete dahil değil')+'</b>'+
+            '🤖 YZ Raporları: <b>'+(wf.ai_reports?'Aktif':'Pakete dahil değil')+'</b>'+
           '</div>'+
         '</div>';
       body.appendChild(doneBox);
@@ -5630,10 +5684,22 @@ async function showNextAuraSetup() {
         next.textContent='Doğrulanıyor...'; next.disabled=true;
         const result=await validateLicense(cfg.license.code);
         if (!result) { err.textContent='❌ Geçersiz lisans kodu. Lütfen kontrol ediniz.'; next.textContent='İleri →'; next.disabled=false; return; }
+        // Sunucu yetkisi: gömülü NX_SECRET ile üretilmiş ama sunucuda kayıtlı
+        // olmayan sahte kodlar burada reddedilir. Ağ hatasında (srv=null) izin verilir.
+        const srv=await nxServerCheck(cfg.license.code);
+        if (srv && ['not_found','invalid','suspended','expired'].includes(srv.status)) {
+          err.textContent = srv.status==='suspended' ? '⛔ Lisans askıya alınmış. Destek ile görüşün.'
+            : srv.status==='expired' ? '⛔ Lisans süresi dolmuş. Lütfen yenileyin.'
+            : '❌ Lisans sunucuda kayıtlı değil veya iptal edilmiş.';
+          next.textContent='İleri →'; next.disabled=false; return;
+        }
         cfg.license={ code:cfg.license.code, product:result.product, tier:result.tier, year:result.year, valid:true };
         step++; renderStep(); return;
       }
-      if (step===2 && !cfg.companyName) { err.textContent='⚠️ Firma adı zorunludur.'; return; }
+      if (step===2) {
+        if (!cfg.companyName) { err.textContent='⚠️ Firma adı zorunludur.'; return; }
+        if (!cfg.sector) { err.textContent='⚠️ Faaliyet alanı / sektör zorunludur (YZ raporları bu bilgiyi kullanır).'; return; }
+      }
       if (step===3) {
         if (!cfg.defaultAdmin.name) { err.textContent='⚠️ Ad Soyad zorunludur.'; return; }
         if (!cfg.defaultAdmin.email) { err.textContent='⚠️ E-posta zorunludur.'; return; }
@@ -5683,7 +5749,7 @@ function tierBlock(feature, label) {
   const users = await loadUsers();
   state.users = users;
   state.targets = await loadTargets();
-  state.groqKey = NEXTAURA_CFG?.groqKey || (await loadApiKey());
+  state.geminiKey = NEXTAURA_CFG?.geminiKey || (await loadApiKey());
   state.loading = false;
   render();
   setTimeout(checkMonthlyReport, 3000);
@@ -6107,6 +6173,85 @@ function startNotificationTimer() {
   if(window._mailInterval) clearInterval(window._mailInterval);
   window._mailInterval = setInterval(checkAllMails, 300000);
   setTimeout(checkAllMails, 8000);
+  // Teklif programı referans senkronu (atanan teklif no → fırsat REF.)
+  if(window._qrefInterval) clearInterval(window._qrefInterval);
+  window._qrefInterval = setInterval(syncQuotationRefs, 300000);
+  setTimeout(syncQuotationRefs, 10000);
+}
+
+// Teklif Programı'ndan teklif numarası/durumunu fırsatlara senkronlar (arka planda).
+async function syncQuotationRefs() {
+  try {
+    if (typeof TEKLIF_APP_URL === 'undefined' || typeof TEKLIF_API_KEY === 'undefined' || !TEKLIF_APP_URL || !TEKLIF_API_KEY) return;
+    // Hem fırsatlardan hem teklif taleplerinden benzersiz quotationId topla
+    const ids = [...new Set([
+      ...(state.opportunities || []).filter(o => o.quotationId).map(o => o.quotationId),
+      ...(state.proposals || []).filter(p => p.quotationId).map(p => p.quotationId),
+    ])];
+    if (ids.length === 0) return;
+    let updatedOpps = [...state.opportunities];
+    let updatedProps = [...state.proposals];
+    let changed = false, deletedCount = 0;
+    for (const qid of ids) {
+      const res = await fetch(
+        `${TEKLIF_APP_URL}/api/v1/crm/quotation-status?id=${encodeURIComponent(qid)}`,
+        { headers: { 'x-crm-key': TEKLIF_API_KEY } }
+      ).catch(() => null);
+      if (!res || !res.ok) continue; // geçici hata → dokunma
+      const body = await res.json().catch(() => null);
+      const d = body && body.data;
+      if (!d) continue;
+
+      // Teklif silinmiş → ilgili CRM kayıtlarını temizle (buton "Teklif Oluştur"a döner)
+      if (d.exists !== true) {
+        for (const o of updatedOpps.filter(x => x.quotationId === qid)) {
+          const upd = { ...o, quotationId: '', quotationUrl: '', quotationStatus: '', value: 0, tenderRef: '', assignedTo: '', ...stamp() };
+          await saveDoc('opportunities', o.id, upd);
+          updatedOpps = updatedOpps.map(x => x.id === o.id ? upd : x);
+          changed = true; deletedCount++;
+        }
+        for (const p of updatedProps.filter(x => x.quotationId === qid)) {
+          const upd = { ...p, quotationId: '', quotationUrl: '', quotationStatus: '', ...stamp() };
+          await saveDoc('proposals', p.id, upd);
+          updatedProps = updatedProps.map(x => x.id === p.id ? upd : x);
+          changed = true;
+        }
+        continue;
+      }
+
+      const ref   = d.number ?? d.reference ?? null;
+      const total = d.grandTotal ? parseFloat(d.grandTotal) : null;
+      // Fırsatlar: durum (hazırlandı/gönderildi) + REF + değer + temsilci
+      for (const o of updatedOpps.filter(x => x.quotationId === qid)) {
+        const patch = {};
+        if (d.status != null && d.status !== o.quotationStatus) patch.quotationStatus = d.status;
+        if (ref != null && ref !== o.tenderRef) patch.tenderRef = ref;
+        if (total != null && total > 0 && total !== o.value) patch.value = total;
+        if (d.salesRep && d.salesRep !== o.assignedTo) patch.assignedTo = d.salesRep;
+        if (Object.keys(patch).length === 0) continue;
+        const upd = { ...o, ...patch, ...stamp() };
+        await saveDoc('opportunities', o.id, upd);
+        updatedOpps = updatedOpps.map(x => x.id === o.id ? upd : x);
+        changed = true;
+      }
+      // Teklif talepleri: durum senkronu (buton/rapor durumları taze kalsın)
+      for (const p of updatedProps.filter(x => x.quotationId === qid)) {
+        if (d.status == null || d.status === p.quotationStatus) continue;
+        const pupd = { ...p, quotationStatus: d.status, ...stamp() };
+        await saveDoc('proposals', p.id, pupd);
+        updatedProps = updatedProps.map(x => x.id === p.id ? pupd : x);
+        changed = true;
+      }
+    }
+    if (changed) {
+      const _scrollSave = [...document.querySelectorAll('.apro-no-sb')].map(el => el.scrollLeft);
+      setState({ opportunities: updatedOpps, proposals: updatedProps });
+      requestAnimationFrame(() => {
+        [...document.querySelectorAll('.apro-no-sb')].forEach((el, i) => { if (_scrollSave[i]) el.scrollLeft = _scrollSave[i]; });
+      });
+      if (deletedCount > 0) showToast('⚠️ Teklif programında silinen ' + deletedCount + ' teklif tespit edildi, CRM kayıtları temizlendi.');
+    }
+  } catch {}
 }
 
 
