@@ -188,6 +188,32 @@ function nxShowLicenseBanner() {
   }
 }
 
+// Firebase'e bağlanılamadığında (yanlış config / ağ) sonsuz "Yükleniyor"
+// yerine açık bir hata ekranı + kurtarma seçenekleri gösterir.
+function nxShowConnectionError() {
+  const root = document.getElementById('root');
+  if (!root) return;
+  root.innerHTML =
+    '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,#0f2040,#1e3a6e);font-family:system-ui,sans-serif;padding:24px">'
+    + '<div style="background:#fff;border-radius:16px;max-width:440px;width:100%;padding:32px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.4)">'
+    + '<div style="font-size:44px;margin-bottom:12px">🔌</div>'
+    + '<div style="font-size:18px;font-weight:800;color:#0f1f35;margin-bottom:8px">Veritabanına Bağlanılamadı</div>'
+    + '<div style="font-size:13px;color:#4a6080;line-height:1.6;margin-bottom:24px">İnternet bağlantınızı kontrol edin. Sorun sürerse kurulum bilgileri (Firebase) hatalı olabilir — kurulumu sıfırlayıp aktivasyon anahtarınızla yeniden bağlanabilirsiniz.</div>'
+    + '<button id="nx-retry-btn" style="width:100%;padding:12px;border:none;border-radius:10px;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:10px">↻ Tekrar Dene</button>'
+    + '<button id="nx-reset-btn" style="width:100%;padding:12px;border:1px solid #d0daea;border-radius:10px;background:#fff;color:#dc2626;font-size:13px;font-weight:600;cursor:pointer">⚙️ Kurulumu Sıfırla</button>'
+    + '<div style="font-size:11px;color:#7a90aa;margin-top:16px">Destek: destek@nextaura.com</div>'
+    + '</div></div>';
+  const retry = document.getElementById('nx-retry-btn');
+  const reset = document.getElementById('nx-reset-btn');
+  if (retry) retry.onclick = () => location.reload();
+  if (reset) reset.onclick = () => {
+    if (confirm('Kurulum bilgileri silinecek ve kurulum ekranı açılacak. Aktivasyon anahtarınızla yeniden bağlanmanız gerekir. Devam edilsin mi?')) {
+      localStorage.removeItem('nextaura_config');
+      location.reload();
+    }
+  };
+}
+
 // Firma & lisans sabitleri (config'den ya da varsayılan)
 const COMPANY_NAME        = NEXTAURA_CFG?.companyName    || 'NextAura';
 const COMPANY_FULL        = COMPANY_NAME + ' CRM';
@@ -5746,10 +5772,21 @@ function tierBlock(feature, label) {
     nxSyncLicense().then(() => nxShowLicenseBanner());
   }
 
-  const users = await loadUsers();
-  state.users = users;
-  state.targets = await loadTargets();
-  state.geminiKey = NEXTAURA_CFG?.geminiKey || (await loadApiKey());
+  // Firebase bağlanamaz/yanlış config olursa Firestore .get() sonsuza kadar
+  // retry yapar ve await asılı kalır → kullanıcı "Yükleniyor"da kilitlenir.
+  // Zaman aşımı ile bunu yakalayıp hata + kurulum sıfırlama seçeneği sunarız.
+  const _withTimeout = (p, ms) => Promise.race([
+    p,
+    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
+  ]);
+  try {
+    state.users   = await _withTimeout(loadUsers(), 12000);
+    state.targets = await _withTimeout(loadTargets(), 12000);
+    state.geminiKey = NEXTAURA_CFG?.geminiKey || (await _withTimeout(loadApiKey(), 12000).catch(() => ''));
+  } catch (e) {
+    nxShowConnectionError();
+    return;
+  }
   state.loading = false;
   render();
   setTimeout(checkMonthlyReport, 3000);
