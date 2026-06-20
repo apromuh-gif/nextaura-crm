@@ -5765,7 +5765,10 @@ function tierBlock(feature, label) {
   // ── Demo / tek-tık kurulum: ?ak=AKTIVASYON_ANAHTARI ──
   // E-postadaki "Demo'yu Başlat" linki buraya düşer; config sunucudan çekilip
   // kaydedilir ve sayfa kurulumsuz olarak yeniden yüklenir.
-  if (NEXTAURA_SETUP_MODE) {
+  // ÖNEMLİ: SETUP_MODE'dan bağımsız çalışır — cihazda zaten bir kurulum (ör. başka
+  // bir firma/demo) varsa bile aktivasyon anahtarı onu EZER. Aksi halde demo linki
+  // önceki config nedeniyle yok sayılır ve yanlış marka/giriş ekranı açılır.
+  {
     const ak = new URLSearchParams(location.search).get('ak');
     if (ak && ak.trim().length >= 8) {
       try {
@@ -5785,6 +5788,9 @@ function tierBlock(feature, label) {
         }
       } catch { /* sessizce manuel kuruluma düş */ }
     }
+  }
+
+  if (NEXTAURA_SETUP_MODE) {
     showNextAuraSetup();
     return;
   }
