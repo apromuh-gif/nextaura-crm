@@ -5762,7 +5762,32 @@ function tierBlock(feature, label) {
 // BAŞLATMA
 // ═══════════════════════════════════════════════════════
 (async function init() {
-  if (NEXTAURA_SETUP_MODE) { showNextAuraSetup(); return; }
+  // ── Demo / tek-tık kurulum: ?ak=AKTIVASYON_ANAHTARI ──
+  // E-postadaki "Demo'yu Başlat" linki buraya düşer; config sunucudan çekilip
+  // kaydedilir ve sayfa kurulumsuz olarak yeniden yüklenir.
+  if (NEXTAURA_SETUP_MODE) {
+    const ak = new URLSearchParams(location.search).get('ak');
+    if (ak && ak.trim().length >= 8) {
+      try {
+        const res = await fetch(`${NX_LICENSE_SERVER}/api/config/${encodeURIComponent(ak.trim())}`);
+        if (res.ok) {
+          const data   = await res.json();
+          const remote = data.config || {};
+          remote.license = { ...(remote.license || {}),
+            code: data.license?.code, product: data.license?.product,
+            tier: data.license?.tier, year: remote.license?.year || 0, valid: true };
+          if (!remote.syncServer) remote.syncServer = NX_LICENSE_SERVER;
+          if (remote.firebase?.apiKey) {
+            localStorage.setItem('nextaura_config', JSON.stringify(remote));
+            location.replace(location.pathname); // ?ak temizlenir, config'le yeniden yüklenir
+            return;
+          }
+        }
+      } catch { /* sessizce manuel kuruluma düş */ }
+    }
+    showNextAuraSetup();
+    return;
+  }
 
   // Lisans banner — önce mevcut cache'e göre göster
   nxShowLicenseBanner();
