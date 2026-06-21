@@ -936,6 +936,12 @@ function renderLogin() {
         renderLoginForm();
         return;
       }
+      // Güvenlik: admin hesabı artık Firebase Auth'ta var → sunucudaki geçici şifreye
+      // gerek yok. Sunucudan temizlemesini iste (fire-and-forget). Anahtar sızsa bile
+      // /api/config bir daha hazır parola döndürmez. Idempotent; başarısız olsa zararı yok.
+      if(isDefaultAdmin && NEXTAURA_CFG?.activationKey) {
+        fetch(`${NX_LICENSE_SERVER}/api/config/${encodeURIComponent(NEXTAURA_CFG.activationKey)}/activated`, { method:'POST' }).catch(()=>{});
+      }
       loginState.checking = false;
       setState({currentUser:urec, view:'app', loading:true});
       await loadAllData();
