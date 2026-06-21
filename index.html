@@ -190,6 +190,32 @@ function nxShowLicenseBanner() {
   }
 }
 
+// Bloklayıcı lisans durumları (silinmiş/iptal/askı/süresi dolmuş/grace bitti).
+// not_found = sunucuda kayıt yok (admin panelinden silinmiş). invalid = ürün/kod uyuşmaz.
+function nxIsBlockingStatus(status) {
+  return status === 'expired' || status === 'suspended' || status === 'grace_expired'
+    || status === 'not_found' || status === 'invalid';
+}
+
+// Tam ekran sert kilit — uygulama içeriğini tamamen kaldırır; sadece banner değil.
+// Yalnızca sunucunun AÇIKÇA bloklayıcı yanıt verdiği veya grace süresinin dolduğu
+// durumda çağrılır; geçici ağ hatasında (grace) çağrılmaz → offline kilit yok.
+function nxHardLock(status) {
+  const msg = status === 'suspended' ? 'Hesabınız askıya alınmıştır.'
+    : status === 'expired' ? 'Lisansınızın süresi dolmuştur.'
+    : status === 'grace_expired' ? 'Lisans sunucusuna uzun süredir bağlanılamadığından erişim kısıtlandı.'
+    : 'Lisansınız geçersiz veya iptal edilmiştir.';
+  document.body.innerHTML =
+    '<div style="position:fixed;inset:0;z-index:2147483647;background:linear-gradient(160deg,#0f2040,#1e3a6e);display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;padding:24px">'
+    + '<div style="background:#fff;border-radius:16px;max-width:440px;width:100%;padding:36px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.4)">'
+    + '<div style="font-size:46px;margin-bottom:12px">&#128274;</div>'
+    + '<div style="font-size:19px;font-weight:800;color:#0f1f35;margin-bottom:8px">Erişim Kısıtlandı</div>'
+    + '<div style="font-size:14px;color:#475569;line-height:1.6;margin-bottom:20px">' + msg + ' Destek: destek@nextaura.com</div>'
+    + '<a href="mailto:destek@nextaura.com" style="display:inline-block;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;text-decoration:none;padding:11px 26px;border-radius:9px;font-weight:700;font-size:14px">Destek Al &#8594;</a>'
+    + '</div></div>';
+  document.body.style.overflow = 'hidden';
+}
+
 // Firebase'e bağlanılamadığında (yanlış config / ağ) sonsuz "Yükleniyor"
 // yerine açık bir hata ekranı + kurtarma seçenekleri gösterir.
 function nxShowConnectionError() {
@@ -5843,12 +5869,16 @@ function tierBlock(feature, label) {
     return;
   }
 
-  // Lisans banner — önce mevcut cache'e göre göster
+  // Lisans: her açılışta TAZE sunucu kontrolü. Admin panelinden silinen/iptal/askıya
+  // alınan veya süresi dolan lisansta erişim ANINDA kesilir (sert kilit) — 30 günlük
+  // periyodu beklemez. Ağ/sunucu erişilemezse nxSyncLicense grace hesaplar; ödeme yapan
+  // müşteri geçici offline'da kilitlenmez. Zaman aşımı offline'da takılmayı önler.
+  await Promise.race([
+    nxSyncLicense(),
+    new Promise((r) => setTimeout(r, 6000)),
+  ]);
+  if (nxIsBlockingStatus(nxGetSyncStatus())) { nxHardLock(nxGetSyncStatus()); return; }
   nxShowLicenseBanner();
-  // Aylık sync (fire-and-forget)
-  if (nxShouldSync()) {
-    nxSyncLicense().then(() => nxShowLicenseBanner());
-  }
 
   // Firebase bağlanamaz/yanlış config olursa Firestore .get() sonsuza kadar
   // retry yapar ve await asılı kalır → kullanıcı "Yükleniyor"da kilitlenir.
