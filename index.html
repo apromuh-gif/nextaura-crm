@@ -5571,7 +5571,7 @@ async function showNextAuraSetup() {
       const fast=document.createElement('div');
       fast.style.cssText='background:#f0fdf4;border:1.5px solid #bbf7d0;border-radius:12px;padding:16px;margin-bottom:18px';
       fast.innerHTML='<div style="font-size:14px;font-weight:700;color:#15803d;margin-bottom:4px">⚡ Hızlı Kurulum</div>'+
-        '<div style="font-size:12px;color:#15803d;opacity:.85;margin-bottom:10px">Aktivasyon anahtarınız varsa tüm ayarlar otomatik yüklenir — başka cihazda yeniden kurulum gerekmez.</div>';
+        '<div style="font-size:12px;color:#15803d;opacity:.85;margin-bottom:10px">Aktivasyon anahtarınızı girin; firma, Firebase ve giriş ayarlarının tümü otomatik yüklenir — elle kurulum gerekmez.</div>';
       const akInp=inp('nxak_...',cfg._activationKey||'',v=>cfg._activationKey=v);
       akInp.style.fontFamily='monospace,sans-serif';
       akInp.style.letterSpacing='.02em';
@@ -5614,28 +5614,7 @@ async function showNextAuraSetup() {
       fast.appendChild(akBtn);
       body.appendChild(fast);
 
-      const orDiv=document.createElement('div');
-      orDiv.style.cssText='text-align:center;font-size:11px;color:#9ca3af;margin:0 0 14px;font-weight:600';
-      orDiv.textContent='— veya manuel kurulum —';
-      body.appendChild(orDiv);
-
-      const title=document.createElement('div');
-      title.style.cssText='font-size:15px;font-weight:700;color:#0f1f35;margin-bottom:6px';
-      title.textContent='Lisans Kodunuzu Girin';
-      body.appendChild(title);
-      const sub=document.createElement('div');
-      sub.style.cssText='font-size:13px;color:#6b7280;margin-bottom:16px';
-      sub.textContent='NextAura tarafından sağlanan lisans kodunuzu girin.';
-      body.appendChild(sub);
-      body.appendChild(lbl('Lisans Kodu',true));
-      const licInp=inp('NEXTAURA-CRM-PRO-2026-XXXXXXXX',cfg.license.code,v=>{cfg.license.code=v;licBadge.innerHTML='';});
-      licInp.style.fontFamily='monospace,sans-serif';
-      licInp.style.letterSpacing='.05em';
-      body.appendChild(licInp);
-      const licBadge=document.createElement('div');
-      licBadge.style.cssText='margin-top:10px;min-height:24px;';
-      body.appendChild(licBadge);
-      body.appendChild(hint('📋 Lisans kodunuz satın alma e-postasında NEXTAURA-ÜRÜN-TİER-YIL-KOD formatında gönderilmiştir.'));
+      body.appendChild(hint('📋 Aktivasyon anahtarınız satın alma/demo e-postanızda nxak_ ile başlayan kod olarak gönderilmiştir. Tüm ayarlar (firma, Firebase, giriş) otomatik yüklenir.'));
     }
 
     // ── Adım 2: Firma bilgileri ──
@@ -5762,6 +5741,9 @@ async function showNextAuraSetup() {
       back.onclick=()=>{step--;renderStep();};
       btnRow.appendChild(back);
     }
+    // Adım 1 yalnız aktivasyon anahtarı ile kurulur (manuel akış kaldırıldı) —
+    // ileri/adım navigasyonu yalnız varsa eski adımlar için (step>1) gösterilir.
+    if (step>1) {
     const next=document.createElement('button');
     next.textContent=step===6?'🚀 CRM\'i Başlat':'İleri →';
     next.style.cssText='flex:2;padding:12px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(99,102,241,.35)';
@@ -5804,6 +5786,7 @@ async function showNextAuraSetup() {
       step++; renderStep();
     };
     btnRow.appendChild(next);
+    }
     body.appendChild(btnRow);
 
     card.appendChild(body);
