@@ -170,18 +170,18 @@ function nxShowLicenseBanner() {
   const bg  = isBlocking ? '#dc2626' : isGrace ? '#d97706' : '#92400e';
   const bg2 = isBlocking ? '#b91c1c' : isGrace ? '#b45309' : '#78350f';
   const msg = isBlocking
-    ? (status === 'suspended' ? 'Bu hesap askıya alınmıştır. Destek: destek@nextaura.com'
-      : (status === 'not_found' || status === 'invalid') ? 'Lisansınız geçersiz veya iptal edilmiş. Destek: destek@nextaura.com'
-      : 'Lisansınızın süresi dolmuştur. Yenileme: destek@nextaura.com')
+    ? (status === 'suspended' ? 'Bu hesap askıya alınmıştır. Destek: info@nextaura.tr'
+      : (status === 'not_found' || status === 'invalid') ? 'Lisansınız geçersiz veya iptal edilmiş. Destek: info@nextaura.tr'
+      : 'Lisansınızın süresi dolmuştur. Yenileme: info@nextaura.tr')
     : isGrace
     ? 'Lisans sunucusuna bağlanılamıyor. Bağlantınızı kontrol edin. Yakında erişim kısıtlanacak.'
-    : `⚠️ Lisansınız ${daysLeft !== null ? daysLeft + ' gün içinde' : 'yakında'} sona eriyor. Yenileme: destek@nextaura.com`;
+    : `⚠️ Lisansınız ${daysLeft !== null ? daysLeft + ' gün içinde' : 'yakında'} sona eriyor. Yenileme: info@nextaura.tr`;
 
   const banner = document.createElement('div');
   banner.id = 'nx-license-banner';
   banner.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:99999;background:${bg};color:#fff;text-align:center;padding:10px 16px;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:10px;`;
   banner.innerHTML = `<span>${isBlocking ? '🔴' : '⚠️'} ${msg}</span>`
-    + (isBlocking ? `<a href="mailto:destek@nextaura.com" style="color:#fff;border:1px solid rgba(255,255,255,0.6);border-radius:6px;padding:2px 10px;font-size:12px;text-decoration:none;background:${bg2}">Destek Al →</a>` : '');
+    + (isBlocking ? `<a href="mailto:info@nextaura.tr" style="color:#fff;border:1px solid rgba(255,255,255,0.6);border-radius:6px;padding:2px 10px;font-size:12px;text-decoration:none;background:${bg2}">Destek Al →</a>` : '');
   document.body.insertBefore(banner, document.body.firstChild);
 
   // Eğer bloklanmışsa uygulama içeriğini kaydır
@@ -210,8 +210,8 @@ function nxHardLock(status) {
     + '<div style="background:#fff;border-radius:16px;max-width:440px;width:100%;padding:36px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.4)">'
     + '<div style="font-size:46px;margin-bottom:12px">&#128274;</div>'
     + '<div style="font-size:19px;font-weight:800;color:#0f1f35;margin-bottom:8px">Erişim Kısıtlandı</div>'
-    + '<div style="font-size:14px;color:#475569;line-height:1.6;margin-bottom:20px">' + msg + ' Destek: destek@nextaura.com</div>'
-    + '<a href="mailto:destek@nextaura.com" style="display:inline-block;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;text-decoration:none;padding:11px 26px;border-radius:9px;font-weight:700;font-size:14px">Destek Al &#8594;</a>'
+    + '<div style="font-size:14px;color:#475569;line-height:1.6;margin-bottom:20px">' + msg + ' Destek: info@nextaura.tr</div>'
+    + '<a href="mailto:info@nextaura.tr" style="display:inline-block;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;text-decoration:none;padding:11px 26px;border-radius:9px;font-weight:700;font-size:14px">Destek Al &#8594;</a>'
     + '</div></div>';
   document.body.style.overflow = 'hidden';
 }
@@ -229,7 +229,7 @@ function nxShowConnectionError() {
     + '<div style="font-size:13px;color:#4a6080;line-height:1.6;margin-bottom:24px">İnternet bağlantınızı kontrol edin. Sorun sürerse kurulum bilgileri (Firebase) hatalı olabilir — kurulumu sıfırlayıp aktivasyon anahtarınızla yeniden bağlanabilirsiniz.</div>'
     + '<button id="nx-retry-btn" style="width:100%;padding:12px;border:none;border-radius:10px;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:10px">↻ Tekrar Dene</button>'
     + '<button id="nx-reset-btn" style="width:100%;padding:12px;border:1px solid #d0daea;border-radius:10px;background:#fff;color:#dc2626;font-size:13px;font-weight:600;cursor:pointer">⚙️ Kurulumu Sıfırla</button>'
-    + '<div style="font-size:11px;color:#7a90aa;margin-top:16px">Destek: destek@nextaura.com</div>'
+    + '<div style="font-size:11px;color:#7a90aa;margin-top:16px">Destek: info@nextaura.tr</div>'
     + '</div></div>';
   const retry = document.getElementById('nx-retry-btn');
   const reset = document.getElementById('nx-reset-btn');
