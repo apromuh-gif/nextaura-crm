@@ -971,7 +971,7 @@ function renderLogin() {
     const root = document.getElementById('root');
     root.innerHTML='';
 
-    const emailInp = inp('e-posta@a-pro.com.tr', loginState.email, v=>{loginState.email=v;loginState.err='';});
+    const emailInp = inp('e-posta@sirketiniz.com', loginState.email, v=>{loginState.email=v;loginState.err='';});
     const pwInp = inp('••••••', loginState.pw, v=>{loginState.pw=v;loginState.err='';}, 'password', {letterSpacing:'0.18em',textAlign:'center',fontSize:'16px'});
     pwInp.addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
 
@@ -2855,7 +2855,7 @@ function buildAdminModal() {
     } else {
       const nName=inp('Ad Soyad',newU.displayName,v=>newU.displayName=v);
       const nPw=inp('Şifre',newU.password,v=>newU.password=v);
-      const nEmail=inp('kullanici@a-pro.com.tr',newU.email,v=>newU.email=v,'email');
+      const nEmail=inp('kullanici@sirketiniz.com',newU.email,v=>newU.email=v,'email');
       const cbAdmin=h('input',{type:'checkbox',style:{accentColor:'#6366f1'}});
       cbAdmin.checked=newU.isAdmin;
       cbAdmin.addEventListener('change',e=>newU.isAdmin=e.target.checked);
