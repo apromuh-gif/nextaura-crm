@@ -545,6 +545,11 @@ function selectTeklifFormat() {
 // Aşama 1+2: Teklif oluştur — tür seçimi + mükerrer koruma + CRM'e quotationId kaydet
 async function teklifOlustur(customer, opportunityTitle, opportunityId) {
   if (!TIER_FEATURES.quotation) { tierBlock('quotation'); return; }
+  // Teklif Programı entegrasyonu yoksa (yalnız-CRM lisans/demo) sunucu hatası yerine bilgi ver.
+  if (!TEKLIF_API_URL) {
+    alert('Teklif oluşturma, Teklif Programı modülü (SUITE) ile birlikte gelir. Bu demo yalnızca CRM modülünü içerir.\n\nTam sürüm için: info@nextaura.tr');
+    return;
+  }
   // Format + para birimi seçimi
   const selection = await selectTeklifFormat();
   if (!selection) return;
