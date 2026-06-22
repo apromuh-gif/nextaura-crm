@@ -157,6 +157,8 @@ function nxShowLicenseBanner() {
   const daysLeft = nxGetDaysLeft();
   const existing = document.getElementById('nx-license-banner');
   if (existing) existing.remove();
+  // Banner yoksa içerik kaydırmasını da sıfırla.
+  document.body.style.paddingTop = '';
   if (status === 'active' || status === 'pending') return;
 
   // not_found = sunucuda kayıt yok (silinmiş/iptal), invalid = ürün/kod uyuşmuyor.
@@ -184,10 +186,12 @@ function nxShowLicenseBanner() {
     + (isBlocking ? `<a href="mailto:info@nextaura.tr" style="color:#fff;border:1px solid rgba(255,255,255,0.6);border-radius:6px;padding:2px 10px;font-size:12px;text-decoration:none;background:${bg2}">Destek Al →</a>` : '');
   document.body.insertBefore(banner, document.body.firstChild);
 
-  // Eğer bloklanmışsa uygulama içeriğini kaydır
-  if (isBlocking) {
-    document.body.style.paddingTop = '44px';
-  }
+  // Banner sabit konumda olduğu için üst menüyü kapatmaması adına içeriği aşağı kaydır.
+  // Yalnızca bloklamada değil, uyarı (warning) ve grace durumlarında da uygulanır.
+  requestAnimationFrame(() => {
+    const h = banner.offsetHeight || 44;
+    document.body.style.paddingTop = h + 'px';
+  });
 }
 
 // Bloklayıcı lisans durumları (silinmiş/iptal/askı/süresi dolmuş/grace bitti).
