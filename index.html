@@ -84,10 +84,12 @@ async function validateLicense(code) {
 const NEXTAURA_SETUP_MODE = !NEXTAURA_CFG?.firebase?.apiKey || !NEXTAURA_CFG?.license?.valid;
 
 // Lisans senkronizasyonu
-const NX_SYNC_KEY        = 'nx_last_sync';
-const NX_SYNC_STATUS_KEY  = 'nx_sync_status';
-const NX_SYNC_DAYS_KEY    = 'nx_days_left';
-const NX_EXPIRES_AT_KEY   = 'nx_expires_at';  // sunucunun döndürdüğü kesin bitiş tarihi (ISO)
+const NX_SYNC_KEY          = 'nx_last_sync';
+const NX_SYNC_STATUS_KEY   = 'nx_sync_status';
+const NX_SYNC_DAYS_KEY     = 'nx_days_left';
+const NX_EXPIRES_AT_KEY    = 'nx_expires_at';      // sunucunun söylediği kesin bitiş tarihi (ISO)
+const NX_SERVER_NOW_KEY    = 'nx_server_now';       // son başarılı sync anındaki sunucu saati (ISO)
+const NX_CLIENT_AT_SYNC_KEY = 'nx_client_at_sync'; // son başarılı sync anındaki istemci saati (ms)
 // Faz 5: cihaz-bağımsız kurulum. Aktivasyon anahtarı ile config bu merkezi
 // lisans sunucusundan çekilir. Operatör kendi dağıtımına göre güncelleyebilir.
 const NX_LICENSE_SERVER = 'https://nextaura-admin.vercel.app';
@@ -121,39 +123,40 @@ async function nxSyncLicense() {
     if (res.ok) {
       const data = await res.json();
       const validProduct = !data.product || ['CRM','SUITE'].includes(data.product);
-      localStorage.setItem(NX_SYNC_KEY,        Date.now().toString());
-      localStorage.setItem(NX_SYNC_STATUS_KEY, validProduct ? data.status : 'invalid');
-      localStorage.setItem(NX_SYNC_DAYS_KEY,   String(data.daysLeft));
-      // Sunucunun kesin bitiş tarihini sakla — offline grace hesabında referans noktası.
-      if (data.expiresAt) localStorage.setItem(NX_EXPIRES_AT_KEY, data.expiresAt);
+      const clientNowAtSync = Date.now();
+      localStorage.setItem(NX_SYNC_KEY,           clientNowAtSync.toString());
+      localStorage.setItem(NX_SYNC_STATUS_KEY,    validProduct ? data.status : 'invalid');
+      localStorage.setItem(NX_SYNC_DAYS_KEY,      String(data.daysLeft));
+      // Sunucu saati referansları — offline grace hesabında istemci saatinden bağımsız doğrulama.
+      if (data.expiresAt)  localStorage.setItem(NX_EXPIRES_AT_KEY,     data.expiresAt);
+      if (data.serverNow)  localStorage.setItem(NX_SERVER_NOW_KEY,     data.serverNow);
+      localStorage.setItem(NX_CLIENT_AT_SYNC_KEY, clientNowAtSync.toString());
       return data;
     }
   } catch {
-    // Network hatası — üç katmanlı offline grace kontrolü.
-    const lastSync = parseInt(localStorage.getItem(NX_SYNC_KEY) || '0', 10);
-    if (lastSync) {
-      const now = Date.now();
+    // Network hatası — sunucu saatine dayalı offline grace kontrolü.
+    // İstemci saatini doğrudan kullanmak yerine son sync'teki sunucu saatini baz alırız:
+    //   tahminiSunucuŞimdi = serverNow + max(0, clientNow - clientAtSync)
+    // max(0, …) sayesinde saat geri alınırsa geçen süre 0 kabul edilir (zaman "donmuş" gibi
+    // davranır) — meşru saat değişikliklerinde (NTP, DST, manuel düzeltme) lisans geçerli kalır.
+    const clientAtSync  = parseInt(localStorage.getItem(NX_CLIENT_AT_SYNC_KEY) || '0', 10);
+    const serverNowStr  = localStorage.getItem(NX_SERVER_NOW_KEY);
+    const expiresAtStr  = localStorage.getItem(NX_EXPIRES_AT_KEY);
+    const lastSync      = parseInt(localStorage.getItem(NX_SYNC_KEY) || '0', 10);
 
-      // 1. Saat geri çekilme tespiti: now, lastSync'den önceye düştüyse manipülasyon var.
-      //    (5 dk tolerans — kış/yaz saati geçişi veya küçük drift'e izin verir)
-      if (now < lastSync - 300_000) {
+    if (serverNowStr && clientAtSync && expiresAtStr) {
+      // Sunucu saati tahmini — istemci saatine bağımsız referans.
+      const elapsed            = Math.max(0, Date.now() - clientAtSync); // negatife düşmez
+      const estimatedServerNow = new Date(serverNowStr).getTime() + elapsed;
+      const expiresAt          = new Date(expiresAtStr).getTime();
+
+      // Mutlak son tarih: expiresAt + grace buffer aşıldıysa kilitle.
+      if (estimatedServerNow > expiresAt + NX_GRACE_DAYS * 86_400_000) {
         localStorage.setItem(NX_SYNC_STATUS_KEY, 'grace_expired');
-        return;
       }
-
-      // 2. Mutlak son tarih: sunucunun söylediği bitiş + grace buffer'ı aşıldıysa kilitle.
-      //    Saat ileri alınarak grace periyodu atlatılamaz.
-      const storedExpiry = localStorage.getItem(NX_EXPIRES_AT_KEY);
-      if (storedExpiry) {
-        const deadline = new Date(storedExpiry).getTime() + NX_GRACE_DAYS * 86_400_000;
-        if (now > deadline) {
-          localStorage.setItem(NX_SYNC_STATUS_KEY, 'grace_expired');
-          return;
-        }
-      }
-
-      // 3. Mevcut kontrol: son başarılı sync'ten bu yana NX_GRACE_DAYS geçti mi?
-      const daysSince = (now - lastSync) / 86400000;
+    } else if (lastSync) {
+      // Eski kurulumlar için (serverNow henüz saklanmamış): mevcut daysSince kontrolü.
+      const daysSince = (Date.now() - lastSync) / 86400000;
       if (daysSince > NX_GRACE_DAYS) {
         localStorage.setItem(NX_SYNC_STATUS_KEY, 'grace_expired');
       }
