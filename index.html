@@ -84,9 +84,10 @@ async function validateLicense(code) {
 const NEXTAURA_SETUP_MODE = !NEXTAURA_CFG?.firebase?.apiKey || !NEXTAURA_CFG?.license?.valid;
 
 // Lisans senkronizasyonu
-const NX_SYNC_KEY       = 'nx_last_sync';
-const NX_SYNC_STATUS_KEY = 'nx_sync_status';
-const NX_SYNC_DAYS_KEY   = 'nx_days_left';
+const NX_SYNC_KEY        = 'nx_last_sync';
+const NX_SYNC_STATUS_KEY  = 'nx_sync_status';
+const NX_SYNC_DAYS_KEY    = 'nx_days_left';
+const NX_EXPIRES_AT_KEY   = 'nx_expires_at';  // sunucunun döndürdüğü kesin bitiş tarihi (ISO)
 // Faz 5: cihaz-bağımsız kurulum. Aktivasyon anahtarı ile config bu merkezi
 // lisans sunucusundan çekilir. Operatör kendi dağıtımına göre güncelleyebilir.
 const NX_LICENSE_SERVER = 'https://nextaura-admin.vercel.app';
@@ -123,13 +124,36 @@ async function nxSyncLicense() {
       localStorage.setItem(NX_SYNC_KEY,        Date.now().toString());
       localStorage.setItem(NX_SYNC_STATUS_KEY, validProduct ? data.status : 'invalid');
       localStorage.setItem(NX_SYNC_DAYS_KEY,   String(data.daysLeft));
+      // Sunucunun kesin bitiş tarihini sakla — offline grace hesabında referans noktası.
+      if (data.expiresAt) localStorage.setItem(NX_EXPIRES_AT_KEY, data.expiresAt);
       return data;
     }
   } catch {
-    // Network hatası — grace period hesapla
+    // Network hatası — üç katmanlı offline grace kontrolü.
     const lastSync = parseInt(localStorage.getItem(NX_SYNC_KEY) || '0', 10);
     if (lastSync) {
-      const daysSince = (Date.now() - lastSync) / 86400000;
+      const now = Date.now();
+
+      // 1. Saat geri çekilme tespiti: now, lastSync'den önceye düştüyse manipülasyon var.
+      //    (5 dk tolerans — kış/yaz saati geçişi veya küçük drift'e izin verir)
+      if (now < lastSync - 300_000) {
+        localStorage.setItem(NX_SYNC_STATUS_KEY, 'grace_expired');
+        return;
+      }
+
+      // 2. Mutlak son tarih: sunucunun söylediği bitiş + grace buffer'ı aşıldıysa kilitle.
+      //    Saat ileri alınarak grace periyodu atlatılamaz.
+      const storedExpiry = localStorage.getItem(NX_EXPIRES_AT_KEY);
+      if (storedExpiry) {
+        const deadline = new Date(storedExpiry).getTime() + NX_GRACE_DAYS * 86_400_000;
+        if (now > deadline) {
+          localStorage.setItem(NX_SYNC_STATUS_KEY, 'grace_expired');
+          return;
+        }
+      }
+
+      // 3. Mevcut kontrol: son başarılı sync'ten bu yana NX_GRACE_DAYS geçti mi?
+      const daysSince = (now - lastSync) / 86400000;
       if (daysSince > NX_GRACE_DAYS) {
         localStorage.setItem(NX_SYNC_STATUS_KEY, 'grace_expired');
       }
