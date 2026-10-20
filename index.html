@@ -5357,6 +5357,7 @@ function render() {
               {icon:'🗄️', label:'Yedekleme & Geri Yükleme', color:'#0f1f35', action:()=>{ menu.remove(); setState({modal:{type:'backup'}}); }},
               {icon:'🖨️', label:'Yazdır',          color:'#0f1f35', action:()=>{ menu.remove(); printDashboard(); }},
               {sep:true},
+              {icon:'🔄', label:'Teklifleri şimdi eşitle', color:'#0369a1', action:()=>{ menu.remove(); syncQuotationRefsNow(); }},
               {icon:'⚙️', label:'Sistem Ayarları', color:'#0f1f35', action:()=>{ menu.remove(); showNextAuraSetup(); }},
               {sep:true},
               {icon:'🔔', label:'Bildirim Testi',  color:'#6d28d9', action:()=>{ menu.remove(); testNotifications(); }},
@@ -6360,9 +6361,41 @@ function startNotificationTimer() {
   window._mailInterval = setInterval(checkAllMails, 300000);
   setTimeout(checkAllMails, 8000);
   // Teklif programı referans senkronu (atanan teklif no → fırsat REF.)
+  // Her sekme/kullanıcı bağlı HER teklif için sunucuyu sorguladığından Vercel CPU limiti doluyordu.
+  // Artık: yalnız sekme GÖRÜNÜRKEN, en sık 15 dk'da bir ve birden çok sekmede yalnız biri
+  // (localStorage ortak zaman damgası) çalışır. Sekmeye dönünce süre dolmuşsa hemen tazelenir.
   if(window._qrefInterval) clearInterval(window._qrefInterval);
-  window._qrefInterval = setInterval(syncQuotationRefs, 300000);
-  setTimeout(syncQuotationRefs, 10000);
+  window._qrefInterval = setInterval(maybeSyncQuotationRefs, 60000); // yalnız kontrol (ağ yok)
+  setTimeout(maybeSyncQuotationRefs, 10000);
+  if(!window._qrefVisBound){
+    window._qrefVisBound = true;
+    document.addEventListener('visibilitychange', function(){
+      if(document.visibilityState === 'visible') maybeSyncQuotationRefs();
+    });
+  }
+}
+
+var QREF_MIN_GAP_MS = 15 * 60 * 1000;
+function maybeSyncQuotationRefs() {
+  try {
+    if(document.visibilityState !== 'visible') return;
+    var now = Date.now();
+    var last = Number(localStorage.getItem('_qrefLastSync')) || 0;
+    if(now - last < QREF_MIN_GAP_MS) return;
+    // Önce damgala: aynı anda açık diğer sekmeler tekrar çalıştırmasın.
+    localStorage.setItem('_qrefLastSync', String(now));
+  } catch(e) { /* localStorage yoksa (gizli mod vb.) yine de çalıştır */ }
+  syncQuotationRefs();
+}
+
+// Araçlar menüsünden "Teklifleri şimdi eşitle": 15 dk beklemeden hemen eşitler (tarayıcı önbelleğini atlar).
+async function syncQuotationRefsNow() {
+  showToast('🔄 Teklifler eşitleniyor…', '#0369a1');
+  try { localStorage.setItem('_qrefLastSync', String(Date.now())); } catch(e) {}
+  window._qrefFresh = true;
+  try { await syncQuotationRefs(); }
+  finally { window._qrefFresh = false; }
+  showToast('✅ Teklifler eşitlendi.');
 }
 
 // Teklif Programı'ndan teklif numarası/durumunu fırsatlara senkronlar (arka planda).
@@ -6380,7 +6413,7 @@ async function syncQuotationRefs() {
     let changed = false, deletedCount = 0;
     for (const qid of ids) {
       const res = await fetch(
-        `${TEKLIF_APP_URL}/api/v1/crm/quotation-status?id=${encodeURIComponent(qid)}`,
+        `${TEKLIF_APP_URL}/api/v1/crm/quotation-status?id=${encodeURIComponent(qid)}${window._qrefFresh ? '&_=' + Date.now() : ''}`,
         { headers: { 'x-crm-key': TEKLIF_API_KEY } }
       ).catch(() => null);
       if (!res || !res.ok) continue; // geçici hata → dokunma
